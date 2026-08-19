@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
+import AIChatbot from "@/components/AIChatbot";
 import { LanguageProvider } from "@/context/LanguageContext";
 import 'leaflet/dist/leaflet.css';
 
@@ -9,7 +10,7 @@ const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Transport Tracker - Real-time Bus Tracking for Small Cities",
-  description: "Live public transport tracking, occupancy indicator, and offline SMS service for small cities.",
+  description: "Live public transport tracking, AI assistant, occupancy indicator, and offline SMS service for small cities.",
 };
 
 export default function RootLayout({
@@ -25,6 +26,7 @@ export default function RootLayout({
           <main className="flex flex-col min-h-[calc(100vh-4rem)]">
             {children}
           </main>
+          <AIChatbot />
         </LanguageProvider>
       </body>
     </html>
