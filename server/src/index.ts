@@ -8,6 +8,7 @@ import routeRoutes from './routes/routeRoutes';
 import stopRoutes from './routes/stopRoutes';
 import busRoutes from './routes/busRoutes';
 import etaRoutes from './routes/etaRoutes';
+import smsRoutes from './routes/smsRoutes';
 import { registerSocketHandlers } from './socket';
 
 dotenv.config();
@@ -42,6 +43,7 @@ app.use('/api/routes', routeRoutes);
 app.use('/api/stops', stopRoutes);
 app.use('/api/buses', busRoutes);
 app.use('/api/eta', etaRoutes);
+app.use('/api/sms', smsRoutes);
 
 // 404 handler
 app.use((_req: Request, res: Response) => {

@@ -26,56 +26,82 @@ export const registerSocketHandlers = (io: Server): void => {
     // ---------------------------------------------------------------------------
     // DRIVER:LOCATION — Driver app sends GPS update
     // ---------------------------------------------------------------------------
-    socket.on('driver:location', async (payload: LocationPayload) => {
-      const { busId, routeId, lat, lng, timestamp = new Date() } = payload;
+    socket.on('driver:location', async (payload: any) => {
+      const busId = payload.busId || 'unknown-bus';
+      const busNumber = payload.busNumber || busId;
+      const routeId = payload.routeId || 'route-1';
+      const lat = payload.lat ?? payload.location?.lat ?? 22.7196;
+      const lng = payload.lng ?? payload.location?.lng ?? 75.8577;
+      const timestamp = payload.timestamp || new Date().toISOString();
 
       try {
         const location = { lat, lng };
 
-        // Update bus current location
-        await Bus.findByIdAndUpdate(busId, {
-          currentLocation: location,
-          lastUpdated: timestamp,
-          isActive: true,
-        });
+        // Attempt MongoDB update if connected
+        if (Bus.db.readyState === 1) {
+          await Bus.findByIdAndUpdate(busId, {
+            currentLocation: location,
+            lastUpdated: new Date(timestamp),
+            isActive: true,
+          }).catch(() => {});
 
-        // Find or create active trip
-        const trip = await Trip.findOne({
-          busId,
-          status: { $in: ['scheduled', 'in-progress'] },
-        });
-
-        if (trip) {
-          trip.locationHistory.push({ lat, lng, timestamp });
-          if (trip.status === 'scheduled') {
-            trip.status = 'in-progress';
-            trip.startTime = timestamp;
-          }
-          await trip.save();
-        } else {
-          // Create new trip if none exists
-          await Trip.create({
+          const trip = await Trip.findOne({
             busId,
-            routeId,
-            startTime: timestamp,
-            status: 'in-progress' as TripStatus,
-            locationHistory: [{ lat, lng, timestamp }],
-          });
-        }
+            status: { $in: ['scheduled', 'in-progress'] },
+          }).catch(() => null);
 
-        // Broadcast position to all passengers subscribed to this route
-        broadcastBusPosition(io, routeId, busId, { lat, lng }, timestamp);
-      } catch (error) {
-        console.error('Error processing driver location:', error);
-        socket.emit('error', { message: 'Failed to process location update' });
+          if (trip) {
+            trip.locationHistory.push({ lat, lng, timestamp: new Date(timestamp) });
+            if (trip.status === 'scheduled') {
+              trip.status = 'in-progress';
+              trip.startTime = new Date(timestamp);
+            }
+            await trip.save().catch(() => {});
+          }
+        }
+      } catch (err) {
+        // Continue broadcasting even if DB fails
       }
+
+      // Broadcast position to all passengers & route subscribers
+      const busUpdate = {
+        busId,
+        busNumber,
+        routeId,
+        location: { lat, lng },
+        lastUpdated: timestamp,
+      };
+
+      io.to(`route:${routeId}`).emit('bus:position', busUpdate);
+      io.to('route:all').emit('bus:position', busUpdate);
+      io.emit('bus:position', busUpdate);
+    });
+
+    // ---------------------------------------------------------------------------
+    // OCCUPANCY:UPDATE — Driver or passenger updates bus crowding level
+    // ---------------------------------------------------------------------------
+    socket.on('occupancy:update', (payload: { busId: string; level: 'low' | 'medium' | 'high' }) => {
+      console.log(`👥 Occupancy update for ${payload.busId}: ${payload.level}`);
+      io.emit('occupancy:broadcast', payload);
+    });
+
+    // ---------------------------------------------------------------------------
+    // SOS:TRIGGER — Emergency panic button activated
+    // ---------------------------------------------------------------------------
+    socket.on('sos:trigger', (payload: { busId: string; busNumber: string; routeId: string; location: { lat: number; lng: number }; timestamp: string }) => {
+      console.warn(`🚨 EMERGENCY SOS TRIGGERED by Bus ${payload.busNumber}!`);
+      io.emit('sos:alert', {
+        ...payload,
+        id: `sos-${Date.now()}`,
+        status: 'ACTIVE',
+      });
     });
 
     // ---------------------------------------------------------------------------
     // PASSENGER:SUBSCRIBE — Passenger subscribes to a route for live updates
     // ---------------------------------------------------------------------------
-    socket.on('passenger:subscribe', (payload: SubscribePayload) => {
-      const { routeId } = payload;
+    socket.on('passenger:subscribe', (payload: any) => {
+      const routeId = typeof payload === 'string' ? payload : (payload?.routeId || 'all');
 
       if (!routeSubscribers.has(routeId)) {
         routeSubscribers.set(routeId, new Set());
@@ -84,48 +110,14 @@ export const registerSocketHandlers = (io: Server): void => {
       const subs = routeSubscribers.get(routeId)!;
       subs.add(socket.id);
 
-      // Join a Socket.IO room for this route for efficient broadcasting
       socket.join(`route:${routeId}`);
-
       console.log(`👤 Passenger ${socket.id} subscribed to route ${routeId}`);
 
-      // Send confirmation
       socket.emit('passenger:subscription-confirmed', { routeId });
     });
 
-    // ---------------------------------------------------------------------------
-    // PASSENGER:UNSUBSCRIBE — Passenger unsubscribes from a route
-    // ---------------------------------------------------------------------------
-    socket.on('passenger:unsubscribe', (payload: SubscribePayload) => {
-      const { routeId } = payload;
-      const subs = routeSubscribers.get(routeId);
-
-      if (subs) {
-        subs.delete(socket.id);
-        if (subs.size === 0) {
-          routeSubscribers.delete(routeId);
-        }
-      }
-
-      socket.leave(`route:${routeId}`);
-      console.log(`👤 Passenger ${socket.id} unsubscribed from route ${routeId}`);
-    });
-
-    // ---------------------------------------------------------------------------
-    // Bus position broadcast is handled internally (not a direct socket event)
-    // ---------------------------------------------------------------------------
-    socket.on('bus:position', () => {
-      // This event is broadcast *to* passengers, not received from them.
-      // If a passenger somehow sends this, we ignore it.
-    });
-
-    // ---------------------------------------------------------------------------
-    // DISCONNECT
-    // ---------------------------------------------------------------------------
     socket.on('disconnect', () => {
       console.log(`🔌 Socket disconnected: ${socket.id}`);
-
-      // Remove socket from all route subscriber sets
       routeSubscribers.forEach((subs, routeId) => {
         subs.delete(socket.id);
         if (subs.size === 0) {
@@ -136,9 +128,6 @@ export const registerSocketHandlers = (io: Server): void => {
   });
 };
 
-/**
- * Broadcasts a bus position to all passengers subscribed to a route.
- */
 export const broadcastBusPosition = (
   io: Server,
   routeId: string,
@@ -146,11 +135,14 @@ export const broadcastBusPosition = (
   location: Location,
   timestamp: Date
 ): void => {
-  io.to(`route:${routeId}`).emit('bus:position', {
+  const busUpdate = {
     busId,
+    busNumber: busId,
     routeId,
-    lat: location.lat,
-    lng: location.lng,
-    timestamp,
-  });
+    location: { lat: location.lat, lng: location.lng },
+    lastUpdated: timestamp.toISOString(),
+  };
+  io.to(`route:${routeId}`).emit('bus:position', busUpdate);
+  io.to('route:all').emit('bus:position', busUpdate);
+  io.emit('bus:position', busUpdate);
 };
