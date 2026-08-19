@@ -3,58 +3,122 @@ import { NextRequest, NextResponse } from "next/server";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { messages, language } = body;
+    const { messages, language, apiKey: clientApiKey } = body;
 
     const userMessage = messages[messages.length - 1]?.content || "";
 
-    const systemPrompt = `You are "Saarthi AI" (सारथी AI), a full-fledged intelligent AI agent and friendly companion embedded in the Indore Smart City Public Transport System for the Smart India Hackathon (SIH).
+    const systemPrompt = `You are "Saarthi AI" (सारथी AI), a full-fledged intelligent conversational AI agent embedded in the Indore Smart City Public Transport System for the Smart India Hackathon (SIH).
 
 Personality & Abilities:
-1. You are a general-purpose, witty, helpful, and natural conversationalist. You can chat normally about ANYTHING (jokes, science, coding, life, weather, philosophy, casual conversations, movies, small talk).
-2. You are also an expert on Indore city, public transport, smart mobility, routes, and tickets.
-3. You speak fluently in English, Hindi, and Hinglish. Adapt to the user's language automatically.
-4. When appropriate, you can trigger actions in the app by including special action tags in your response:
-   - [ACTION:NAVIGATE_MAP] -> when user asks to open/see map
-   - [ACTION:OPEN_FARE] -> when user asks to calculate fare or buy ticket
-   - [ACTION:OPEN_DRIVER] -> when user asks for driver portal
+1. You are a versatile, friendly, intelligent companion. You can chat normally about ANY topic (science, coding, jokes, life, weather, philosophy, everyday questions, hackathons).
+2. You are also the ultimate transit expert for Indore city: you know routes, stops, fares, and live fleet management.
+3. You speak fluently in English, Hindi, and Hinglish. Automatically adapt to the user's language.
+4. When relevant, you can execute real UI actions in the app by including these action tags:
+   - [ACTION:NAVIGATE_MAP] -> when user asks to see/open the live map
+   - [ACTION:OPEN_FARE] -> when user asks for fare calculator or digital ticket
+   - [ACTION:OPEN_DRIVER] -> when user asks for driver terminal
    - [ACTION:OPEN_ADMIN] -> when user asks for admin control room
-   - [ACTION:OPEN_SMS] -> when user asks for offline SMS feature
+   - [ACTION:OPEN_SMS] -> when user asks for offline SMS app
 
-Keep responses clear, natural, engaging, and well-formatted with markdown and emojis.`;
+Keep responses natural, helpful, engaging, and well-formatted with markdown and emojis.`;
 
     const chatHistory = [
       { role: "system", content: systemPrompt },
-      ...messages.slice(-8), // Keep recent conversation context
+      ...messages.slice(-8),
     ];
 
-    // Call free multi-LLM gateway (Pollinations AI / OpenAI compatible)
-    const response = await fetch("https://text.pollinations.ai/", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: chatHistory,
-        model: "openai",
-        seed: 42,
-        jsonMode: false,
-      }),
-      signal: AbortSignal.timeout(8000), // 8s timeout
-    });
+    // Priority 1: Google Gemini API (if GEMINI_API_KEY is configured in Vercel or environment)
+    const geminiKey = process.env.GEMINI_API_KEY || (clientApiKey?.startsWith("AIza") ? clientApiKey : null);
+    if (geminiKey) {
+      try {
+        const geminiRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [
+                {
+                  role: "user",
+                  parts: [{ text: `${systemPrompt}\n\nUser Question: ${userMessage}` }],
+                },
+              ],
+              generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 600,
+              },
+            }),
+            signal: AbortSignal.timeout(9000),
+          }
+        );
 
-    if (response.ok) {
-      const replyText = await response.text();
-      if (replyText && replyText.trim().length > 0) {
-        return NextResponse.json({ reply: replyText.trim() });
+        if (geminiRes.ok) {
+          const geminiData = await geminiRes.json();
+          const text = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) return NextResponse.json({ reply: text.trim() });
+        }
+      } catch (err) {
+        console.warn("Gemini API call failed, falling back...", err);
       }
     }
 
-    // Fallback if external API is slow
+    // Priority 2: OpenRouter API (if OPENROUTER_API_KEY is configured)
+    const openrouterKey = process.env.OPENROUTER_API_KEY || (clientApiKey?.startsWith("sk-or") ? clientApiKey : null);
+    if (openrouterKey) {
+      try {
+        const orRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${openrouterKey}`,
+          },
+          body: JSON.stringify({
+            model: "google/gemini-2.0-flash-exp:free",
+            messages: chatHistory,
+          }),
+          signal: AbortSignal.timeout(9000),
+        });
+
+        if (orRes.ok) {
+          const orData = await orRes.json();
+          const text = orData.choices?.[0]?.message?.content;
+          if (text) return NextResponse.json({ reply: text.trim() });
+        }
+      } catch (err) {
+        console.warn("OpenRouter API call failed, falling back...", err);
+      }
+    }
+
+    // Priority 3: Free Zero-Config Multi-LLM Engine (Pollinations / OpenAI compatible)
+    try {
+      const response = await fetch("https://text.pollinations.ai/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: chatHistory,
+          model: "openai",
+          seed: 42,
+        }),
+        signal: AbortSignal.timeout(9000),
+      });
+
+      if (response.ok) {
+        const replyText = await response.text();
+        if (replyText && replyText.trim().length > 0) {
+          return NextResponse.json({ reply: replyText.trim() });
+        }
+      }
+    } catch (e) {
+      console.warn("Free LLM gateway timeout, using intelligent fallback");
+    }
+
+    // Priority 4: Built-in Intelligent Fallback Response
     const fallbackReply = getIntelligentFallback(userMessage, language);
     return NextResponse.json({ reply: fallbackReply });
   } catch (error) {
     console.error("Chat API error:", error);
-    // Intelligent local fallback so the user always gets a great reply
     return NextResponse.json({
-      reply: "I'm right here with you! 😊 I can answer any questions, chat normally, help you navigate routes in Indore, calculate fares, or show you live bus tracking on the map. What's on your mind?",
+      reply: "I am here! 😊 Ask me any question, chat about any topic, or ask about Indore bus routes, fares, and live GPS tracking.",
     });
   }
 }

@@ -20,6 +20,8 @@ import {
   Volume2,
   Trash2,
   Compass,
+  Key,
+  Check,
 } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
 
@@ -36,9 +38,19 @@ export default function AIChatbot() {
   const { language } = useLanguage();
   const [isOpen, setIsOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [showKeyModal, setShowKeyModal] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [savedKeySuccess, setSavedKeySuccess] = useState(false);
   const [inputMsg, setInputMsg] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isListening, setIsListening] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("saarthi_custom_api_key");
+      if (stored) setApiKey(stored);
+    } catch (e) {}
+  }, []);
 
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -64,7 +76,18 @@ export default function AIChatbot() {
     }
   }, [messages, isOpen, isTyping]);
 
-  // Speech Recognition support (if supported by browser)
+  const saveCustomKey = (key: string) => {
+    setApiKey(key);
+    try {
+      localStorage.setItem("saarthi_custom_api_key", key);
+      setSavedKeySuccess(true);
+      setTimeout(() => {
+        setSavedKeySuccess(false);
+        setShowKeyModal(false);
+      }, 1500);
+    } catch (e) {}
+  };
+
   const toggleVoiceInput = () => {
     if (typeof window === "undefined") return;
 
@@ -106,7 +129,6 @@ export default function AIChatbot() {
     }
   };
 
-  // Text-to-speech for AI responses
   const speakMessage = (text: string) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     const cleanText = text.replace(/\[ACTION:.*?\]/g, "").replace(/[*_#`]/g, "");
@@ -131,7 +153,6 @@ export default function AIChatbot() {
     setIsTyping(true);
 
     try {
-      // Build full conversation history for AI agent
       const historyPayload = messages.concat(userMessage).map((m) => ({
         role: m.sender === "user" ? "user" : "assistant",
         content: m.text,
@@ -143,13 +164,13 @@ export default function AIChatbot() {
         body: JSON.stringify({
           messages: historyPayload,
           language,
+          apiKey: apiKey || undefined,
         }),
       });
 
       const data = await res.json();
       let botReply = data.reply || "I am right here with you! How can I assist you further?";
 
-      // Check and execute Agentic Actions
       let actionFound: string | undefined = undefined;
       if (botReply.includes("[ACTION:NAVIGATE_MAP]")) {
         actionFound = "Navigating to Live Map...";
@@ -167,7 +188,6 @@ export default function AIChatbot() {
         setTimeout(() => router.push("/sms"), 1500);
       }
 
-      // Remove action tags from visible message
       const cleanReply = botReply.replace(/\[ACTION:.*?\]/g, "").trim();
 
       const botMessage: Message = {
@@ -214,7 +234,7 @@ export default function AIChatbot() {
 
   return (
     <>
-      {/* Floating Action Badge */}
+      {/* Floating Action Button */}
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
@@ -231,7 +251,7 @@ export default function AIChatbot() {
               {language === "hi" ? "सारथी AI एजेंट" : "Saarthi AI Agent"}
             </span>
             <span className="text-[9px] text-cyan-200 font-medium leading-none">
-              {language === "hi" ? "किसी भी विषय पर बात करें" : "Talk about anything"}
+              {language === "hi" ? "बातचीत + बस ट्रैकिंग" : "Conversational Copilot"}
             </span>
           </div>
         </button>
@@ -258,8 +278,8 @@ export default function AIChatbot() {
                     <span>{language === "hi" ? "सारथी AI एजेंट" : "Saarthi AI Agent"}</span>
                     <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
                   </h3>
-                  <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 uppercase tracking-wider">
-                    Full AI Live
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 uppercase tracking-wider">
+                    {apiKey ? "Custom API" : "Live AI"}
                   </span>
                 </div>
                 <p className="text-[10px] text-slate-400">
@@ -269,6 +289,17 @@ export default function AIChatbot() {
             </div>
 
             <div className="flex items-center gap-1">
+              {/* API Key Modal Button */}
+              <button
+                onClick={() => setShowKeyModal(!showKeyModal)}
+                title="Link custom API Key (Gemini/OpenRouter)"
+                className={`p-2 rounded-xl transition-colors ${
+                  apiKey ? "text-emerald-400 bg-emerald-950/40 border border-emerald-500/30" : "text-slate-400 hover:text-white hover:bg-slate-800/80"
+                }`}
+              >
+                <Key className="w-4 h-4" />
+              </button>
+
               <button
                 onClick={clearChat}
                 title="Clear conversation"
@@ -292,6 +323,39 @@ export default function AIChatbot() {
             </div>
           </div>
 
+          {/* Optional API Key Config Overlay */}
+          {showKeyModal && (
+            <div className="p-4 bg-slate-900 border-b border-slate-800 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Key className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Link Your Custom AI API Key</span>
+                </span>
+                <button onClick={() => setShowKeyModal(false)} className="text-slate-400 hover:text-white text-xs">
+                  ✕
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400 mb-3">
+                Paste your free <strong>Google Gemini API Key</strong> (starts with <code>AIza...</code>) or <strong>OpenRouter Key</strong>.
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="Paste AI API key here..."
+                  className="flex-1 h-9 px-3 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs outline-none focus:border-indigo-500 font-mono"
+                />
+                <button
+                  onClick={() => saveCustomKey(apiKey)}
+                  className="h-9 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1 transition"
+                >
+                  {savedKeySuccess ? <Check className="w-3.5 h-3.5" /> : "Save"}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Message History */}
           <div className="flex-1 p-4 overflow-y-auto space-y-4 text-xs font-sans">
             {messages.map((m) => (
@@ -310,13 +374,12 @@ export default function AIChatbot() {
                     className={`p-3.5 rounded-2xl whitespace-pre-line leading-relaxed shadow-md ${
                       m.sender === "user"
                         ? "bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-br-none"
-                        : "bg-slate-900 border border-slate-800 text-slate-200 rounded-bl-none"
+                        : "bg-slate-900 border border-slate-800/90 text-slate-200 rounded-bl-none"
                     }`}
                   >
                     {m.text}
                   </div>
 
-                  {/* Triggered Agentic Action Badge */}
                   {m.actionTriggered && (
                     <div className="mt-1.5 text-[10px] font-bold text-cyan-400 flex items-center gap-1 bg-cyan-950/60 border border-cyan-500/30 px-2.5 py-1 rounded-lg animate-pulse self-start">
                       <Compass className="w-3 h-3 animate-spin" />
@@ -324,7 +387,6 @@ export default function AIChatbot() {
                     </div>
                   )}
 
-                  {/* Speech playback for bot message */}
                   {m.sender === "bot" && (
                     <div className="flex items-center gap-2 mt-1 px-1 text-[10px] text-slate-500">
                       <span>{m.time}</span>
@@ -358,7 +420,7 @@ export default function AIChatbot() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Quick Topic Chips (Conversational & Transit) */}
+          {/* Quick Topic Chips */}
           <div className="p-2 bg-slate-900/60 border-t border-slate-800/80 flex items-center gap-1.5 overflow-x-auto">
             {[
               language === "hi" ? "एक मजेदार जोक सुनाओ" : "Tell me a joke 😄",
@@ -385,7 +447,6 @@ export default function AIChatbot() {
             }}
             className="p-3 bg-slate-900 border-t border-slate-800 flex items-center gap-2"
           >
-            {/* Voice input button */}
             <button
               type="button"
               onClick={toggleVoiceInput}
