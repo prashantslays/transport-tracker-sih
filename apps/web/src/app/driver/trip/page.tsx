@@ -54,14 +54,31 @@ export default function TripTerminal() {
           setCurrentLocation(location);
 
           if (driverInfo) {
-            socket.emit("driver:location", {
+            const payload = {
               busId: driverInfo.busNumber,
               busNumber: driverInfo.busNumber,
               routeId: "Route 1 (Station-Vijay Nagar)",
               driverId: driverInfo.driverId,
               location,
               timestamp: new Date().toISOString(),
-            });
+            };
+
+            // 1. Socket.IO broadcast
+            socket.emit("driver:location", payload);
+
+            // 2. BroadcastChannel for instant Vercel sync
+            try {
+              if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+                const ch = new BroadcastChannel("indore_transit_fleet");
+                ch.postMessage({ type: "driver:location", payload });
+                ch.close();
+              }
+            } catch (e) {}
+
+            // 3. LocalStorage event sync
+            try {
+              localStorage.setItem("active_driver_location", JSON.stringify(payload));
+            } catch (e) {}
           }
         },
         (err) => {
@@ -70,15 +87,27 @@ export default function TripTerminal() {
           // Fallback simulation coordinate so demo works seamlessly indoors
           const simLocation = { lat: 22.7216, lng: 75.8727 };
           setCurrentLocation(simLocation);
+
           if (driverInfo) {
-            socket.emit("driver:location", {
+            const fallbackPayload = {
               busId: driverInfo.busNumber,
               busNumber: driverInfo.busNumber,
               routeId: "Route 1",
               driverId: driverInfo.driverId,
               location: simLocation,
               timestamp: new Date().toISOString(),
-            });
+            };
+            socket.emit("driver:location", fallbackPayload);
+            try {
+              if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+                const ch = new BroadcastChannel("indore_transit_fleet");
+                ch.postMessage({ type: "driver:location", payload: fallbackPayload });
+                ch.close();
+              }
+            } catch (e) {}
+            try {
+              localStorage.setItem("active_driver_location", JSON.stringify(fallbackPayload));
+            } catch (e) {}
           }
         },
         { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
