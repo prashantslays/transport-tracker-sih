@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { LogOut, MapPin, Activity, ShieldAlert, Users, AlertTriangle } from "lucide-react";
+import { LogOut, MapPin, Activity, ShieldAlert, Users, AlertTriangle, Navigation } from "lucide-react";
 import { socket } from "@/lib/socket";
 import { useLanguage } from "@/context/LanguageContext";
 
@@ -223,11 +223,23 @@ export default function TripTerminal() {
           </span>
         </button>
 
-        {/* Live GPS Coordinates */}
+        {/* Live GPS Coordinates & View on Map Button */}
         {isActive && currentLocation && (
-          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900 border border-slate-800 text-xs text-slate-300 font-mono">
-            <MapPin className="w-3.5 h-3.5 text-emerald-400" />
-            Lat: {currentLocation.lat.toFixed(4)}, Lng: {currentLocation.lng.toFixed(4)}
+          <div className="flex flex-col items-center gap-3">
+            <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900 border border-slate-800 text-xs text-slate-300 font-mono">
+              <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+              Lat: {currentLocation.lat.toFixed(4)}, Lng: {currentLocation.lng.toFixed(4)}
+            </div>
+
+            <a
+              href="/map"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-5 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-indigo-600/30 transition"
+            >
+              <Navigation className="w-4 h-4" />
+              <span>View My Bus Live on Map ➔</span>
+            </a>
           </div>
         )}
 

@@ -1,22 +1,32 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup, CircleMarker } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, CircleMarker, useMap } from "react-leaflet";
 import L from "leaflet";
 import { socket } from "@/lib/socket";
-import { Users, AlertTriangle, ShieldAlert, Sparkles, Navigation } from "lucide-react";
+import { Users, AlertTriangle, ShieldAlert, Sparkles, Navigation, LocateFixed, Eye } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
 
-// Default to Indore center
+// Default center
 const DEFAULT_CENTER: [number, number] = [22.7196, 75.8577];
 
-// Custom Bus Marker Icon
+// Standard Bus Marker
 const busIcon = new L.Icon({
   iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png",
   shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
   iconSize: [25, 41],
   iconAnchor: [12, 41],
   popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
+
+// Highlighted Driver Bus Marker (Green)
+const driverBusIcon = new L.Icon({
+  iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
+  iconSize: [30, 48],
+  iconAnchor: [15, 48],
+  popupAnchor: [1, -38],
   shadowSize: [41, 41],
 });
 
@@ -31,25 +41,24 @@ const CITY_STOPS = [
   { id: "st-7", name: "Bhanwarkuan Square", nameHi: "भंवरकुआं चौराहा", coords: [22.6896, 75.8647] as [number, number] },
 ];
 
-// Predefined route waypoints for realistic fleet movement
 const SIM_ROUTES = {
   route1: [
-    { lat: 22.7126, lng: 75.8667 }, // Sarwate
-    { lat: 22.7206, lng: 75.8777 }, // Geeta Bhawan
-    { lat: 22.7256, lng: 75.8897 }, // Palasia
-    { lat: 22.7386, lng: 75.8917 }, // TI Mall
-    { lat: 22.7536, lng: 75.8937 }, // Vijay Nagar
+    { lat: 22.7126, lng: 75.8667 },
+    { lat: 22.7206, lng: 75.8777 },
+    { lat: 22.7256, lng: 75.8897 },
+    { lat: 22.7386, lng: 75.8917 },
+    { lat: 22.7536, lng: 75.8937 },
   ],
   route2: [
-    { lat: 22.7196, lng: 75.8577 }, // Rajwada
-    { lat: 22.7176, lng: 75.8377 }, // Bada Ganpati
-    { lat: 22.7216, lng: 75.8017 }, // Airport
+    { lat: 22.7196, lng: 75.8577 },
+    { lat: 22.7176, lng: 75.8377 },
+    { lat: 22.7216, lng: 75.8017 },
   ],
   route3: [
-    { lat: 22.6896, lng: 75.8647 }, // Bhanwarkuan
-    { lat: 22.7056, lng: 75.8727 }, // Navlakha
-    { lat: 22.7356, lng: 75.8857 }, // LIG
-    { lat: 22.7656, lng: 75.8957 }, // MR10
+    { lat: 22.6896, lng: 75.8647 },
+    { lat: 22.7056, lng: 75.8727 },
+    { lat: 22.7356, lng: 75.8857 },
+    { lat: 22.7656, lng: 75.8957 },
   ],
 };
 
@@ -61,6 +70,7 @@ type Bus = {
   lastUpdated: string;
   occupancy?: "low" | "medium" | "high";
   speed?: string;
+  isDriverSelf?: boolean;
 };
 
 type SOSAlert = {
@@ -70,6 +80,17 @@ type SOSAlert = {
   location: { lat: number; lng: number };
   timestamp: string;
 };
+
+// Sub-component to pan map smoothly
+function MapPanController({ target }: { target: [number, number] | null }) {
+  const map = useMap();
+  useEffect(() => {
+    if (target) {
+      map.flyTo(target, 15, { duration: 1.5 });
+    }
+  }, [target, map]);
+  return null;
+}
 
 export default function LiveMap() {
   const { language, t } = useLanguage();
@@ -112,13 +133,34 @@ export default function LiveMap() {
     },
   });
 
+  const [activeDriverBus, setActiveDriverBus] = useState<Bus | null>(null);
+  const [mapTarget, setMapTarget] = useState<[number, number] | null>(null);
   const [isConnected, setIsConnected] = useState(true);
   const [activeSOS, setActiveSOS] = useState<SOSAlert | null>(null);
 
   useEffect(() => {
-    // 1. Socket.IO connection (when backend server is available)
-    socket.connect();
+    // 1. Initial Load of Active Driver from LocalStorage on mount
+    try {
+      const savedDriver = localStorage.getItem("active_driver_location");
+      if (savedDriver) {
+        const payload = JSON.parse(savedDriver);
+        const driverBusObj: Bus = {
+          ...payload,
+          isDriverSelf: true,
+          lastUpdated: new Date().toISOString(),
+        };
+        setBuses((prev) => ({
+          ...prev,
+          [payload.busId]: driverBusObj,
+        }));
+        setActiveDriverBus(driverBusObj);
+        // Automatically pan to driver's location
+        setMapTarget([payload.location.lat, payload.location.lng]);
+      }
+    } catch (e) {}
 
+    // 2. Socket.IO connection
+    socket.connect();
     socket.on("connect", () => {
       setIsConnected(true);
       socket.emit("passenger:subscribe", "all");
@@ -149,7 +191,7 @@ export default function LiveMap() {
       setActiveSOS(alert);
     });
 
-    // 2. BroadcastChannel & LocalStorage sync (Works across all tabs/phones on Vercel without backend!)
+    // 3. BroadcastChannel & LocalStorage live cross-tab/device sync
     let channel: BroadcastChannel | null = null;
     try {
       if (typeof window !== "undefined" && "BroadcastChannel" in window) {
@@ -157,14 +199,17 @@ export default function LiveMap() {
         channel.onmessage = (event) => {
           const { type, payload } = event.data;
           if (type === "driver:location") {
+            const driverBusObj: Bus = {
+              ...payload,
+              isDriverSelf: true,
+              lastUpdated: new Date().toISOString(),
+            };
             setBuses((prev) => ({
               ...prev,
-              [payload.busId]: {
-                ...prev[payload.busId],
-                ...payload,
-                lastUpdated: new Date().toISOString(),
-              },
+              [payload.busId]: driverBusObj,
             }));
+            setActiveDriverBus(driverBusObj);
+            setMapTarget([payload.location.lat, payload.location.lng]);
           } else if (type === "sos:alert") {
             setActiveSOS(payload);
           } else if (type === "occupancy:update") {
@@ -178,70 +223,67 @@ export default function LiveMap() {
           }
         };
       }
-    } catch (e) {
-      console.warn("BroadcastChannel not supported", e);
-    }
+    } catch (e) {}
 
-    // 3. Fallback LocalStorage event listener for multi-window sync
     const handleStorage = (e: StorageEvent) => {
       if (e.key === "active_driver_location" && e.newValue) {
         const payload = JSON.parse(e.newValue);
+        const driverBusObj: Bus = {
+          ...payload,
+          isDriverSelf: true,
+          lastUpdated: new Date().toISOString(),
+        };
         setBuses((prev) => ({
           ...prev,
-          [payload.busId]: {
-            ...prev[payload.busId],
-            ...payload,
-            lastUpdated: new Date().toISOString(),
-          },
+          [payload.busId]: driverBusObj,
         }));
+        setActiveDriverBus(driverBusObj);
+        setMapTarget([payload.location.lat, payload.location.lng]);
       }
     };
     window.addEventListener("storage", handleStorage);
 
-    // 4. Autonomous Client-Side Simulation Loop (Ensures Vercel deployment always has live moving buses)
+    // 4. Background Fleet Simulation Loop
     let step = 0;
     const simInterval = setInterval(() => {
       step++;
       setBuses((prev) => {
         const updated = { ...prev };
-        
-        // Move Bus 1001 along Route 1
+
         const r1 = SIM_ROUTES.route1;
         const pt1 = r1[step % r1.length];
         if (updated["bus-1001"]) {
           updated["bus-1001"] = {
             ...updated["bus-1001"],
             location: {
-              lat: pt1.lat + (Math.sin(step) * 0.001),
-              lng: pt1.lng + (Math.cos(step) * 0.001),
+              lat: pt1.lat + Math.sin(step) * 0.001,
+              lng: pt1.lng + Math.cos(step) * 0.001,
             },
             lastUpdated: new Date().toISOString(),
           };
         }
 
-        // Move Bus 1002 along Route 2
         const r2 = SIM_ROUTES.route2;
         const pt2 = r2[step % r2.length];
         if (updated["bus-1002"]) {
           updated["bus-1002"] = {
             ...updated["bus-1002"],
             location: {
-              lat: pt2.lat + (Math.cos(step * 0.8) * 0.001),
-              lng: pt2.lng + (Math.sin(step * 0.8) * 0.001),
+              lat: pt2.lat + Math.cos(step * 0.8) * 0.001,
+              lng: pt2.lng + Math.sin(step * 0.8) * 0.001,
             },
             lastUpdated: new Date().toISOString(),
           };
         }
 
-        // Move Bus 1003 along Route 3
         const r3 = SIM_ROUTES.route3;
         const pt3 = r3[step % r3.length];
         if (updated["bus-1003"]) {
           updated["bus-1003"] = {
             ...updated["bus-1003"],
             location: {
-              lat: pt3.lat + (Math.sin(step * 0.5) * 0.001),
-              lng: pt3.lng + (Math.cos(step * 0.5) * 0.001),
+              lat: pt3.lat + Math.sin(step * 0.5) * 0.001,
+              lng: pt3.lng + Math.cos(step * 0.5) * 0.001,
             },
             lastUpdated: new Date().toISOString(),
           };
@@ -265,12 +307,12 @@ export default function LiveMap() {
 
   return (
     <div className="w-full h-full relative">
-      {/* Live Connection & SOS Status Badge */}
+      {/* Top Status Badges */}
       <div className="absolute top-4 left-4 z-[1000] flex flex-col gap-2 max-w-sm">
-        <div className="bg-slate-900/90 text-white px-4 py-2.5 rounded-2xl border border-slate-800 shadow-xl backdrop-blur-md">
+        <div className="bg-slate-900/95 text-white px-4 py-2.5 rounded-2xl border border-slate-800 shadow-2xl backdrop-blur-md">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2 text-sm font-bold">
-              <span className={`w-2.5 h-2.5 rounded-full ${isConnected ? "bg-emerald-500 animate-pulse" : "bg-emerald-400"}`} />
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
               {language === "hi" ? "लाइव जीपीएस ट्रैकिंग चालू" : "Live GPS Fleet Active"}
             </div>
             <span className="text-xs font-mono px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 font-bold">
@@ -282,6 +324,28 @@ export default function LiveMap() {
             <span className="text-slate-400">• 7 Major Stops</span>
           </div>
         </div>
+
+        {/* Driver Live Indicator & Quick Jump Button */}
+        {activeDriverBus && (
+          <div className="bg-emerald-950/95 border border-emerald-500/50 text-emerald-200 p-3 rounded-2xl shadow-xl backdrop-blur-md flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="w-3 h-3 rounded-full bg-emerald-400 animate-ping shrink-0" />
+              <div>
+                <div className="font-bold text-white">Your Bus #{activeDriverBus.busNumber}</div>
+                <div className="text-[10px] text-emerald-300 font-mono">
+                  {activeDriverBus.location.lat.toFixed(4)}, {activeDriverBus.location.lng.toFixed(4)}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => setMapTarget([activeDriverBus.location.lat, activeDriverBus.location.lng])}
+              className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 shadow-md transition shrink-0"
+            >
+              <LocateFixed className="w-3.5 h-3.5" />
+              <span>Jump to My Bus</span>
+            </button>
+          </div>
+        )}
 
         {/* Flashing SOS Alert if triggered */}
         {activeSOS && (
@@ -306,6 +370,9 @@ export default function LiveMap() {
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
+        {/* Pan controller */}
+        <MapPanController target={mapTarget} />
+
         {/* Bus Stop Markers */}
         {CITY_STOPS.map((stop) => (
           <CircleMarker
@@ -325,6 +392,7 @@ export default function LiveMap() {
 
         {/* Live Moving Buses */}
         {Object.values(buses).map((bus) => {
+          const isDriver = bus.isDriverSelf || bus.busId.startsWith("D-") || bus.busId === activeDriverBus?.busId;
           const occ = bus.occupancy || "low";
           const occBadge =
             occ === "low"
@@ -337,14 +405,20 @@ export default function LiveMap() {
             <Marker
               key={bus.busId}
               position={[bus.location.lat, bus.location.lng]}
-              icon={busIcon}
+              icon={isDriver ? driverBusIcon : busIcon}
             >
               <Popup>
-                <div className="font-sans text-sm min-w-[180px]">
+                <div className="font-sans text-sm min-w-[200px]">
                   <div className="flex items-center justify-between border-b border-slate-200 pb-1.5 mb-1.5">
-                    <span className="font-bold text-slate-900">Bus #{bus.busNumber}</span>
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700">
-                      LIVE
+                    <span className="font-bold text-slate-900">
+                      {isDriver ? `🌟 YOUR BUS: ${bus.busNumber}` : `Bus #${bus.busNumber}`}
+                    </span>
+                    <span
+                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                        isDriver ? "bg-emerald-100 text-emerald-800 font-black" : "bg-indigo-50 text-indigo-700"
+                      }`}
+                    >
+                      {isDriver ? "DRIVER ACTIVE" : "LIVE"}
                     </span>
                   </div>
                   <div className="text-xs text-slate-600 space-y-1">
@@ -353,8 +427,11 @@ export default function LiveMap() {
                       <Users className="w-3 h-3 text-slate-500" />
                       <span className="font-medium">{occBadge}</span>
                     </div>
-                    <div className="text-[10px] text-slate-400 pt-1">
-                      GPS Ping: {new Date(bus.lastUpdated).toLocaleTimeString()}
+                    <div className="text-[10px] text-slate-400 pt-1 font-mono">
+                      GPS: {bus.location.lat.toFixed(4)}, {bus.location.lng.toFixed(4)}
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      Last Update: {new Date(bus.lastUpdated).toLocaleTimeString()}
                     </div>
                   </div>
                 </div>
