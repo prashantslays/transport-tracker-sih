@@ -1,0 +1,22 @@
+{
+  "name": "transport-tracker",
+  "version": "1.0.0",
+  "description": "Real-time transport tracking monorepo - passenger app and server",
+  "private": true,
+  "workspaces": [
+    "apps/web",
+    "server"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "twilio:web": "turbo run twilio:web"
+  },
+  "devDependencies": {
+    "turbo": "^2.1.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
