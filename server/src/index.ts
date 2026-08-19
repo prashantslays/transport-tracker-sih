@@ -1,24 +1,56 @@
 import express, { Express, Request, Response } from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
+import cors from 'cors';
 import dotenv from 'dotenv';
+import { connectDB } from './config/database';
+import routeRoutes from './routes/routeRoutes';
+import stopRoutes from './routes/stopRoutes';
+import busRoutes from './routes/busRoutes';
+import etaRoutes from './routes/etaRoutes';
+import { registerSocketHandlers } from './socket';
 
 dotenv.config();
 
 const app: Express = express();
 const server = http.createServer(app);
-const port = process.env.PORT || 4000;
+const port = process.env.PORT || 3001;
 
+// ---------------------------------------------------------------------------
 // Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// ---------------------------------------------------------------------------
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+}));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Basic health check route
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
 app.get('/health', (_req: Request, res: Response) => {
-  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.status(200).json({
+    status: 'ok',
+    service: 'transport-tracker-server',
+    timestamp: new Date().toISOString(),
+    port: Number(port),
+  });
 });
 
-// Socket.IO setup
+app.use('/api/routes', routeRoutes);
+app.use('/api/stops', stopRoutes);
+app.use('/api/buses', busRoutes);
+app.use('/api/eta', etaRoutes);
+
+// 404 handler
+app.use((_req: Request, res: Response) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
+// ---------------------------------------------------------------------------
+// Socket.IO
+// ---------------------------------------------------------------------------
 const io = new Server(server, {
   cors: {
     origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
@@ -26,14 +58,15 @@ const io = new Server(server, {
   },
 });
 
-io.on('connection', (socket) => {
-  console.log(`Client connected: ${socket.id}`);
+registerSocketHandlers(io);
 
-  socket.on('disconnect', () => {
-    console.log(`Client disconnected: ${socket.id}`);
+// ---------------------------------------------------------------------------
+// Start server
+// ---------------------------------------------------------------------------
+connectDB().then(() => {
+  server.listen(port, () => {
+    console.log(`🚀 Transport Tracker server listening on http://localhost:${port}`);
+    console.log(`📡 Socket.IO ready for connections`);
+    console.log(`🗄️  MongoDB connected`);
   });
-});
-
-server.listen(port, () => {
-  console.log(`🚀 Server listening on http://localhost:${port}`);
 });
